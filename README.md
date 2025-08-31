@@ -26,5 +26,9 @@ npm run dev
 - Next.js frontend with Tailwind CSS
 - Express backend with Prisma
 
+## Notes
+- Upload parsing is stubbed for now; after parsing, select a Route and resolve each student's address via the autocomplete field (uses `PLACES_BROWSER_KEY`). On accept, the server creates Students and Trips.
+- Trip assignment uses Google Distance Matrix when `DM_SERVER_KEY` is set. If unavailable, it falls back to straight-line distance to keep local testing unblocked, and marks the assignment method in `assignment_json`.
+
 ## License
 MIT

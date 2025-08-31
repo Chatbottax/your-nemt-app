@@ -13,7 +13,7 @@ model Driver {
   id                   Int      @id @default(autoincrement())
   name                 String
   home_formatted_address String
-  home_place_id        String
+  home_place_id        String   @unique
   home_lat             Float
   home_lng             Float
   createdAt            DateTime @default(now())
@@ -24,7 +24,7 @@ model Student {
   id                   Int      @id @default(autoincrement())
   name                 String
   pickup_formatted_address String
-  pickup_place_id      String
+  pickup_place_id      String   @unique
   pickup_lat           Float
   pickup_lng           Float
   createdAt            DateTime @default(now())

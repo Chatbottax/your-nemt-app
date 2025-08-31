@@ -76,23 +76,46 @@ app.post('/uploads', upload.single('file'), async (req, res) => {
 });
 
 app.post('/uploads/:id/parse', async (req, res) => {
-  // Placeholder: In real app call Vision API
+  // Placeholder parse: returns an example structure owner can edit/accept on FE.
+  // For real OCR, integrate Google Vision with VISION_OCR_KEY and populate students array.
   const id = Number(req.params.id);
-  const parsed = { students: [] };
-  const uploadRec = await prisma.upload.update({ where: { id }, data: { parsed_json: parsed, status: 'PARSED' } });
+  const example = {
+    students: [
+      {
+        name: 'Sample Student 1',
+        pickup_formatted_address: '1600 Amphitheatre Pkwy, Mountain View, CA',
+        // FE should resolve place details before accept
+        pickup_place_id: null,
+        pickup_lat: null,
+        pickup_lng: null
+      }
+    ]
+  };
+  const uploadRec = await prisma.upload.update({ where: { id }, data: { parsed_json: example, status: 'PARSED' } });
   res.json(uploadRec);
 });
 
 app.post('/uploads/:id/accept', async (req, res) => {
   const id = Number(req.params.id);
-  const { routeId } = req.body;
+  const { routeId, students: incomingStudents } = req.body;
   const uploadRec = await prisma.upload.findUnique({ where: { id } });
-  const parsed = uploadRec.parsed_json || { students: [] };
-  const studentsData = [];
-  for (const s of parsed.students) {
+  const parsed = uploadRec?.parsed_json || { students: [] };
+  const source = Array.isArray(incomingStudents) && incomingStudents.length > 0 ? incomingStudents : parsed.students;
+
+  const created = [];
+  for (const s of source) {
+    if (!s.pickup_place_id || s.pickup_lat == null || s.pickup_lng == null) {
+      // Require FE to resolve address to place details before accept when not available
+      return res.status(400).json({ error: 'Missing place details for one or more students' });
+    }
     const student = await prisma.student.upsert({
       where: { pickup_place_id: s.pickup_place_id },
-      update: {},
+      update: {
+        name: s.name,
+        pickup_formatted_address: s.pickup_formatted_address,
+        pickup_lat: s.pickup_lat,
+        pickup_lng: s.pickup_lng,
+      },
       create: {
         name: s.name,
         pickup_formatted_address: s.pickup_formatted_address,
@@ -102,10 +125,10 @@ app.post('/uploads/:id/accept', async (req, res) => {
       }
     });
     await prisma.trip.create({ data: { routeId, studentId: student.id } });
-    studentsData.push(student);
+    created.push(student);
   }
   await prisma.upload.update({ where: { id }, data: { status: 'ACCEPTED' } });
-  res.json({ students: studentsData });
+  res.json({ students: created });
 });
 
 // Trips
@@ -115,23 +138,62 @@ app.post('/trips', async (req, res) => {
   res.json(trip);
 });
 
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371e3;
+  const toRad = d => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c; // meters
+}
+
 async function assignDriver(trip) {
   const drivers = await prisma.driver.findMany();
   const student = await prisma.student.findUnique({ where: { id: trip.studentId } });
   const dmKey = process.env.DM_SERVER_KEY;
   let best = null;
-  for (const driver of drivers) {
-    const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${driver.home_lat},${driver.home_lng}&destinations=${student.pickup_lat},${student.pickup_lng}&key=${dmKey}`;
-    const dm = await fetch(url).then(r => r.json());
-    const elem = dm.rows[0].elements[0];
-    const duration = elem.duration.value; // seconds
-    const distance = elem.distance.value; // meters
-    const current = { driver, duration, distance };
-    if (!best || duration < best.duration || (duration === best.duration && (distance < best.distance || (distance === best.distance && driver.name < best.driver.name)))) {
-      best = current;
+
+  if (dmKey) {
+    for (const driver of drivers) {
+      try {
+        const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${driver.home_lat},${driver.home_lng}&destinations=${student.pickup_lat},${student.pickup_lng}&key=${dmKey}`;
+        const dm = await fetch(url).then(r => r.json());
+        const elem = dm?.rows?.[0]?.elements?.[0];
+        if (!elem || elem.status !== 'OK') throw new Error('DM element not OK');
+        const duration = elem.duration.value; // seconds
+        const distance = elem.distance.value; // meters
+        const current = { driver, duration, distance };
+        if (!best || duration < best.duration || (duration === best.duration && (distance < best.distance || (distance === best.distance && driver.name < best.driver.name)))) {
+          best = current;
+        }
+      } catch (_) {
+        // fall through to fallback if any error
+        best = null;
+        break;
+      }
     }
   }
-  const assignment_json = { driverId: best.driver.id, duration_s: best.duration, distance_m: best.distance, api_timestamp_iso: new Date().toISOString() };
+
+  if (!best) {
+    // Fallback: straight-line distance ranking when DM is unavailable
+    for (const driver of drivers) {
+      const distance = haversine(driver.home_lat, driver.home_lng, student.pickup_lat, student.pickup_lng);
+      const duration = distance; // proxy for tie-breaking
+      const current = { driver, duration, distance };
+      if (!best || duration < best.duration || (duration === best.duration && (distance < best.distance || (distance === best.distance && driver.name < best.driver.name)))) {
+        best = current;
+      }
+    }
+  }
+
+  const assignment_json = {
+    driverId: best.driver.id,
+    duration_s: Math.round(best.duration),
+    distance_m: Math.round(best.distance),
+    api_timestamp_iso: new Date().toISOString(),
+    method: dmKey ? 'distance_matrix' : 'haversine_fallback'
+  };
   const updated = await prisma.trip.update({ where: { id: trip.id }, data: { assigned_driver_id: best.driver.id, assignment_json } });
   return updated;
 }

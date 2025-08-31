@@ -2,12 +2,13 @@
   "name": "your-nemt-app",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run server\" \"npm run frontend\"",
     "server": "nodemon server/index.js",
     "frontend": "next dev",
     "build": "next build",
-    "start": "node server/index.js & next start",
+    "start": "concurrently \"node server/index.js\" \"next start\"",
     "db:migrate": "prisma migrate deploy",
     "seed": "node prisma/seed.js",
     "test": "echo 'No tests'"
