@@ -1,0 +1,76 @@
+// Prisma schema for NEMT app
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Driver {
+  id                   Int      @id @default(autoincrement())
+  name                 String
+  home_formatted_address String
+  home_place_id        String
+  home_lat             Float
+  home_lng             Float
+  createdAt            DateTime @default(now())
+  trips                Trip[]   @relation("DriverTrips")
+}
+
+model Student {
+  id                   Int      @id @default(autoincrement())
+  name                 String
+  pickup_formatted_address String
+  pickup_place_id      String
+  pickup_lat           Float
+  pickup_lng           Float
+  createdAt            DateTime @default(now())
+  trips                Trip[]
+}
+
+model Route {
+  id                    Int      @id @default(autoincrement())
+  name                  String
+  route_pay_one_way_cents Int
+  route_pay_total_cents Int
+  driver_pay_cents       Int
+  profit_cents           Int
+  createdAt             DateTime @default(now())
+  trips                 Trip[]
+}
+
+model Trip {
+  id                   Int      @id @default(autoincrement())
+  routeId              Int
+  studentId            Int
+  pickup_time          DateTime?
+  dropoff_time         DateTime?
+  assigned_driver_id   Int?
+  assignment_json      Json?
+  createdAt            DateTime @default(now())
+
+  route   Route   @relation(fields: [routeId], references: [id])
+  student Student @relation(fields: [studentId], references: [id])
+  driver  Driver? @relation("DriverTrips", fields: [assigned_driver_id], references: [id])
+}
+
+model Upload {
+  id          Int      @id @default(autoincrement())
+  filename    String
+  mime        String
+  size        Int
+  storage_path String
+  ocr_json    Json?
+  parsed_json Json?
+  status      UploadStatus @default(PENDING)
+  createdAt   DateTime @default(now())
+}
+
+enum UploadStatus {
+  PENDING
+  PARSED
+  ACCEPTED
+}
