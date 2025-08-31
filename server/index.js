@@ -3,13 +3,18 @@ import cors from 'cors';
 import multer from 'multer';
 import fetch from 'node-fetch';
 import { PrismaClient } from '@prisma/client';
+import fs from 'fs';
 
 const prisma = new PrismaClient();
+const IS_SQLITE = ((process.env.DB_PROVIDER || '').toLowerCase() === 'sqlite') || ((process.env.DATABASE_URL || '').startsWith('file:'));
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 const upload = multer({ dest: 'uploads/' });
+
+// Ensure uploads directory exists
+try { fs.mkdirSync('uploads', { recursive: true }); } catch {}
 
 // Drivers
 app.post('/drivers', async (req, res) => {
@@ -91,15 +96,18 @@ app.post('/uploads/:id/parse', async (req, res) => {
       }
     ]
   };
-  const uploadRec = await prisma.upload.update({ where: { id }, data: { parsed_json: example, status: 'PARSED' } });
-  res.json(uploadRec);
+  const data = IS_SQLITE ? { parsed_json: JSON.stringify(example), status: 'PARSED' } : { parsed_json: example, status: 'PARSED' };
+  const uploadRec = await prisma.upload.update({ where: { id }, data });
+  // Always return parsed_json as an object to the FE
+  res.json({ id: uploadRec.id, parsed_json: example, status: uploadRec.status });
 });
 
 app.post('/uploads/:id/accept', async (req, res) => {
   const id = Number(req.params.id);
   const { routeId, students: incomingStudents } = req.body;
   const uploadRec = await prisma.upload.findUnique({ where: { id } });
-  const parsed = uploadRec?.parsed_json || { students: [] };
+  const parsedField = uploadRec?.parsed_json;
+  const parsed = typeof parsedField === 'string' ? JSON.parse(parsedField) : (parsedField || { students: [] });
   const source = Array.isArray(incomingStudents) && incomingStudents.length > 0 ? incomingStudents : parsed.students;
 
   const created = [];
@@ -187,22 +195,61 @@ async function assignDriver(trip) {
     }
   }
 
-  const assignment_json = {
+  const assignment_obj = {
     driverId: best.driver.id,
     duration_s: Math.round(best.duration),
     distance_m: Math.round(best.distance),
     api_timestamp_iso: new Date().toISOString(),
     method: dmKey ? 'distance_matrix' : 'haversine_fallback'
   };
+  const assignment_json = IS_SQLITE ? JSON.stringify(assignment_obj) : assignment_obj;
   const updated = await prisma.trip.update({ where: { id: trip.id }, data: { assigned_driver_id: best.driver.id, assignment_json } });
   return updated;
 }
 
 app.post('/trips/:id/assign', async (req, res) => {
   const id = Number(req.params.id);
+  const body = req.body || {};
   const trip = await prisma.trip.findUnique({ where: { id } });
-  const assigned = await assignDriver(trip);
-  res.json(assigned);
+
+  async function hasConflict(driverId, start, end, routeId) {
+    if (!start || !end) return false;
+    const dayStart = new Date(start); dayStart.setHours(0,0,0,0);
+    const dayEnd = new Date(dayStart); dayEnd.setDate(dayEnd.getDate() + 1);
+    const others = await prisma.trip.findMany({
+      where: {
+        assigned_driver_id: driverId,
+        id: { not: id },
+        routeId: { not: routeId },
+        pickup_time: { gte: dayStart, lt: dayEnd },
+        dropoff_time: { not: null }
+      },
+      select: { id: true, pickup_time: true, dropoff_time: true, routeId: true }
+    });
+    const s1 = new Date(trip.pickup_time || start).getTime();
+    const e1 = new Date(trip.dropoff_time || end).getTime();
+    return others.find(o => {
+      const s2 = new Date(o.pickup_time).getTime();
+      const e2 = new Date(o.dropoff_time).getTime();
+      return s1 < e2 && s2 < e1;
+    });
+  }
+
+  // Manual assignment path
+  if (body.driverId) {
+    const conflict = await hasConflict(body.driverId, trip.pickup_time, trip.dropoff_time, trip.routeId);
+    if (conflict) return res.status(409).json({ error: 'Driver time conflict', conflict });
+    const assignment_obj = { driverId: body.driverId, api_timestamp_iso: new Date().toISOString(), method: 'manual' };
+    const assignment_json = IS_SQLITE ? JSON.stringify(assignment_obj) : assignment_obj;
+    const updated = await prisma.trip.update({ where: { id }, data: { assigned_driver_id: body.driverId, assignment_json } });
+    return res.json(updated);
+  }
+
+  // Auto-assign path
+  const proposed = await assignDriver(trip);
+  const conflict = await hasConflict(proposed.assigned_driver_id, proposed.pickup_time, proposed.dropoff_time, proposed.routeId);
+  if (conflict) return res.status(409).json({ error: 'Driver time conflict', conflict });
+  res.json(proposed);
 });
 
 app.get('/trips', async (req, res) => {
@@ -225,6 +272,8 @@ app.get('/dashboard/summary', async (req, res) => {
   if (range === 'week') {
     const day = start.getDay();
     start.setDate(start.getDate() - day); // start of week
+  } else if (range === 'month') {
+    start.setDate(1);
   }
   start.setHours(0,0,0,0);
   const routes = await prisma.route.findMany({ where: { createdAt: { gte: start } } });
@@ -235,6 +284,48 @@ app.get('/dashboard/summary', async (req, res) => {
     return acc;
   }, { revenue_cents:0, driver_pay_cents:0, profit_cents:0 });
   res.json({ routes, totals });
+});
+
+// KPI endpoint: totals and drivers working for day/week/month
+app.get('/dashboard/kpis', async (req, res) => {
+  const range = (req.query.range || 'day').toString();
+  const now = new Date();
+  let start = new Date(now);
+  if (range === 'week') {
+    const day = start.getDay();
+    start.setDate(start.getDate() - day);
+  } else if (range === 'month') {
+    start.setDate(1);
+  }
+  start.setHours(0,0,0,0);
+  const end = new Date(start);
+  if (range === 'day') end.setDate(end.getDate() + 1);
+  if (range === 'week') end.setDate(end.getDate() + 7);
+  if (range === 'month') { end.setMonth(end.getMonth() + 1); }
+
+  // Find trips in window (prefer pickup_time, else createdAt)
+  const trips = await prisma.trip.findMany({
+    where: {
+      OR: [
+        { pickup_time: { gte: start, lt: end } },
+        { AND: [ { pickup_time: null }, { createdAt: { gte: start, lt: end } } ] }
+      ]
+    },
+    include: { route: true }
+  });
+
+  // Distinct routes present in window
+  const routeIds = Array.from(new Set(trips.filter(t => t.routeId).map(t => t.routeId)));
+  const routes = routeIds.length ? await prisma.route.findMany({ where: { id: { in: routeIds } } }) : [];
+  const totals = routes.reduce((acc, r) => {
+    acc.revenue_cents += r.route_pay_total_cents;
+    acc.driver_pay_cents += r.driver_pay_cents;
+    acc.profit_cents += r.profit_cents;
+    return acc;
+  }, { revenue_cents:0, driver_pay_cents:0, profit_cents:0 });
+
+  const driversWorking = new Set(trips.map(t => t.assigned_driver_id).filter(Boolean)).size;
+  res.json({ range, totals, trips_count: trips.length, drivers_working: driversWorking, start, end });
 });
 
 const PORT = process.env.PORT || 4000;

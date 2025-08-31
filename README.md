@@ -30,5 +30,17 @@ npm run dev
 - Upload parsing is stubbed for now; after parsing, select a Route and resolve each student's address via the autocomplete field (uses `PLACES_BROWSER_KEY`). On accept, the server creates Students and Trips.
 - Trip assignment uses Google Distance Matrix when `DM_SERVER_KEY` is set. If unavailable, it falls back to straight-line distance to keep local testing unblocked, and marks the assignment method in `assignment_json`.
 
+## Local Database
+- Preferred: Docker Desktop + Postgres
+  1. Install Docker Desktop (Windows) and start it
+  2. In repo root: `docker compose up -d`
+  3. Ensure `.env` has a Postgres `DATABASE_URL` (example in `.env.example`)
+  4. Run: `npm run db:migrate && npm run seed`
+
+- Dev fallback: SQLite (no external install)
+  - Already configured in `.env` as `file:./dev.db`. To use it:
+    - `npm run dev:sqlite`
+  - For production, switch back to Postgres as above.
+
 ## License
 MIT

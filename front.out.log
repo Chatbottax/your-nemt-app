@@ -1,0 +1,10 @@
+
+> your-nemt-app@1.0.0 frontend
+> next dev
+
+   ▲ Next.js 15.5.2
+   - Local:        http://localhost:3000
+   - Network:      http://192.168.1.170:3000
+   - Environments: .env
+
+ ✓ Starting...

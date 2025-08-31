@@ -1,0 +1,6 @@
+
+> your-nemt-app@1.0.0 dev
+> concurrently "npm run server" "npm run frontend"
+
+[1] npm run frontend exited with code 3221225786
+[0] npm run server exited with code 3221225786
