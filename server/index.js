@@ -4,6 +4,9 @@ import multer from 'multer';
 import fetch from 'node-fetch';
 import { PrismaClient } from '@prisma/client';
 import fs from 'fs';
+import path from 'path';
+// Import the core parser to avoid pdf-parse's debug harness executing under ESM
+import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 
 const prisma = new PrismaClient();
 const IS_SQLITE = ((process.env.DB_PROVIDER || '').toLowerCase() === 'sqlite') || ((process.env.DATABASE_URL || '').startsWith('file:'));
@@ -81,25 +84,154 @@ app.post('/uploads', upload.single('file'), async (req, res) => {
 });
 
 app.post('/uploads/:id/parse', async (req, res) => {
-  // Placeholder parse: returns an example structure owner can edit/accept on FE.
-  // For real OCR, integrate Google Vision with VISION_OCR_KEY and populate students array.
   const id = Number(req.params.id);
-  const example = {
-    students: [
-      {
-        name: 'Sample Student 1',
-        pickup_formatted_address: '1600 Amphitheatre Pkwy, Mountain View, CA',
-        // FE should resolve place details before accept
-        pickup_place_id: null,
-        pickup_lat: null,
-        pickup_lng: null
+
+  // Helpers
+  function parseStudentsFromText(text) {
+    const lines = (text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const students = [];
+    const addrRegex = /(\d+\s+[^,]+\s+(St|Street|Ave|Avenue|Rd|Road|Blvd|Boulevard|Ct|Court|Dr|Drive|Ln|Lane|Hwy|Highway|Pkwy|Parkway|Way|Pl|Place)\b[^\n]*)/i;
+    const timeRegex = /\b(\d{1,2}[:\.]\d{2}\s?(AM|PM)?)\b/gi;
+
+    for (let i = 0; i < lines.length; i++) {
+      const nameLine = lines[i];
+      const next = lines[i + 1] || '';
+      const twoLineAddr = addrRegex.exec(next);
+      const inlineAddr = addrRegex.exec(nameLine);
+
+      let name = '';
+      let address = '';
+      let pickup_time = null;
+      let dropoff_time = null;
+
+      // Extract times if present (first -> pickup, second -> dropoff)
+      const timesInName = [...(nameLine.match(timeRegex) || [])];
+      const timesInNext = [...(next.match(timeRegex) || [])];
+      const allTimes = [...timesInName, ...timesInNext].map(t => t.replace(/\./g, ':'));
+      if (allTimes.length > 0) {
+        const now = new Date();
+        const mk = (t) => {
+          const m = t.match(/(\d{1,2})[:](\d{2})\s?(AM|PM)?/i);
+          if (!m) return null;
+          let hh = parseInt(m[1], 10);
+          const mm = parseInt(m[2], 10);
+          const ampm = (m[3] || '').toUpperCase();
+          if (ampm === 'PM' && hh < 12) hh += 12;
+          if (ampm === 'AM' && hh === 12) hh = 0;
+          const d = new Date(now); d.setHours(hh, mm, 0, 0); return d.toISOString();
+        };
+        pickup_time = mk(allTimes[0]);
+        if (allTimes[1]) dropoff_time = mk(allTimes[1]);
       }
-    ]
-  };
-  const data = IS_SQLITE ? { parsed_json: JSON.stringify(example), status: 'PARSED' } : { parsed_json: example, status: 'PARSED' };
-  const uploadRec = await prisma.upload.update({ where: { id }, data });
-  // Always return parsed_json as an object to the FE
-  res.json({ id: uploadRec.id, parsed_json: example, status: uploadRec.status });
+
+      if (twoLineAddr) {
+        name = nameLine.replace(timeRegex, '').trim();
+        address = twoLineAddr[0].trim();
+        i++; // consume next line
+      } else if (inlineAddr) {
+        const addr = inlineAddr[0];
+        const before = nameLine.split(addr)[0].trim();
+        name = before.replace(timeRegex, '').trim();
+        address = addr.trim();
+      } else {
+        continue;
+      }
+
+      if (!name && address) {
+        // Try to infer name from surrounding tokens (best-effort)
+        const maybeName = (lines[i - 1] || '').trim();
+        if (maybeName && !addrRegex.test(maybeName)) name = maybeName;
+      }
+
+      if (name && address) {
+        students.push({
+          name,
+          pickup_formatted_address: address,
+          pickup_place_id: null,
+          pickup_lat: null,
+          pickup_lng: null,
+          ...(pickup_time ? { pickup_time } : {}),
+          ...(dropoff_time ? { dropoff_time } : {}),
+        });
+      }
+    }
+
+    // Deduplicate by name+address
+    const seen = new Set();
+    return students.filter(s => {
+      const k = `${s.name}::${s.pickup_formatted_address}`.toLowerCase();
+      if (seen.has(k)) return false; seen.add(k); return true;
+    });
+  }
+
+  async function extractTextFromImageVision(filePath) {
+    const key = process.env.VISION_OCR_KEY;
+    if (!key) return null;
+    const buf = fs.readFileSync(filePath);
+    const content = buf.toString('base64');
+    const body = {
+      requests: [
+        {
+          image: { content },
+          features: [{ type: 'DOCUMENT_TEXT_DETECTION' }]
+        }
+      ]
+    };
+    const url = `https://vision.googleapis.com/v1/images:annotate?key=${key}`;
+    const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!resp.ok) return null;
+    const json = await resp.json();
+    const text = json?.responses?.[0]?.fullTextAnnotation?.text || '';
+    return { text, raw: json };
+  }
+
+  async function extractTextFromPdf(filePath) {
+    try {
+      const data = await pdfParse(fs.readFileSync(filePath));
+      return { text: data.text || '', raw: { numpages: data.numpages } };
+    } catch (e) {
+      return { text: '', raw: { error: 'pdf_parse_failed' } };
+    }
+  }
+
+  // Load upload record
+  const uploadRec = await prisma.upload.findUnique({ where: { id } });
+  if (!uploadRec) return res.status(404).json({ error: 'Upload not found' });
+  const filePath = uploadRec.storage_path;
+  const mime = uploadRec.mime || '';
+  const ext = path.extname(uploadRec.filename || '').toLowerCase();
+
+  let ocr = null;
+  let text = '';
+
+  try {
+    if (mime.startsWith('image/') || ['.jpg', '.jpeg', '.png'].includes(ext)) {
+      const result = await extractTextFromImageVision(filePath);
+      if (result) { ocr = result.raw; text = result.text; }
+    } else if (mime === 'application/pdf' || ext === '.pdf') {
+      const result = await extractTextFromPdf(filePath);
+      ocr = result.raw; text = result.text;
+    }
+  } catch (e) {
+    // proceed to fallback
+  }
+
+  // Fallback: if nothing extracted, seed with a single empty row
+  if (!text || text.trim().length === 0) {
+    text = '';
+  }
+
+  const students = parseStudentsFromText(text);
+  const parsed = { students: students.length ? students : [
+    { name: '', pickup_formatted_address: '', pickup_place_id: null, pickup_lat: null, pickup_lng: null }
+  ] };
+
+  const data = IS_SQLITE
+    ? { parsed_json: JSON.stringify(parsed), ocr_json: JSON.stringify(ocr || {}), status: 'PARSED' }
+    : { parsed_json: parsed, ocr_json: (ocr || {}), status: 'PARSED' };
+
+  const updated = await prisma.upload.update({ where: { id }, data });
+  res.json({ id: updated.id, parsed_json: parsed, status: updated.status });
 });
 
 app.post('/uploads/:id/accept', async (req, res) => {
@@ -132,7 +264,9 @@ app.post('/uploads/:id/accept', async (req, res) => {
         pickup_lng: s.pickup_lng
       }
     });
-    await prisma.trip.create({ data: { routeId, studentId: student.id } });
+    const pickup_time = s.pickup_time ? new Date(s.pickup_time) : null;
+    const dropoff_time = s.dropoff_time ? new Date(s.dropoff_time) : null;
+    await prisma.trip.create({ data: { routeId, studentId: student.id, pickup_time, dropoff_time } });
     created.push(student);
   }
   await prisma.upload.update({ where: { id }, data: { status: 'ACCEPTED' } });

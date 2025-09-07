@@ -6,7 +6,8 @@ export default function AddressInput({ value, onSelect }) {
   useEffect(() => {
     if (!window.google) {
       const script = document.createElement('script');
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${process.env.PLACES_BROWSER_KEY}&libraries=places`;
+      // Use Maps JavaScript API key for loading the script; Places library is included
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${process.env.MAPS_JS_BROWSER_KEY}&libraries=places`;
       document.head.appendChild(script);
       script.onload = initAutocomplete;
     } else {

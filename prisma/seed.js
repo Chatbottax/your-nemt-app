@@ -51,10 +51,10 @@ async function main() {
 
   // Seed routes (names only for now; pay values example)
   const routesSeed = [
-    { name: 'RCC SPE (Welding) – Alejandra’s Group', oneWay: 5200, driverPay: 3000 },
-    { name: 'RCC SPE (Welding) – Sana’s Group', oneWay: 5200, driverPay: 3000 },
-    { name: 'Dynamic Hope SPE – Talal’s Group', oneWay: 4500, driverPay: 2800 },
-    { name: 'Project Team SPE – Talal’s Group', oneWay: 3000, driverPay: 2000 },
+    { name: "RCC SPE (Welding) - Alejandra's Group", oneWay: 5200, driverPay: 3000 },
+    { name: "RCC SPE (Welding) - Sana's Group", oneWay: 5200, driverPay: 3000 },
+    { name: "Dynamic Hope SPE - Talal's Group", oneWay: 4500, driverPay: 2800 },
+    { name: "Project Team SPE - Talal's Group", oneWay: 3000, driverPay: 2000 },
   ];
   for (const r of routesSeed) {
     await prisma.route.create({ data: {
@@ -105,18 +105,18 @@ async function main() {
   // Build a minimal set of trips to exercise KPIs (one pickup and one dropoff window per route)
   const toCreate = [
     // Alejandra group examples
-    { route: 'RCC SPE (Welding) – Alejandra’s Group', student: 'seed-david', pickup: '12:25', drop: '13:00' },
-    { route: 'RCC SPE (Welding) – Alejandra’s Group', student: 'seed-zain', pickup: '12:25', drop: '13:00' },
-    { route: 'RCC SPE (Welding) – Alejandra’s Group', student: 'seed-destiny', pickup: '12:49', drop: '13:00' },
+    { route: "RCC SPE (Welding) - Alejandra's Group", student: 'seed-david', pickup: '12:25', drop: '13:00' },
+    { route: "RCC SPE (Welding) - Alejandra's Group", student: 'seed-zain', pickup: '12:25', drop: '13:00' },
+    { route: "RCC SPE (Welding) - Alejandra's Group", student: 'seed-destiny', pickup: '12:49', drop: '13:00' },
     // Sana group
-    { route: 'RCC SPE (Welding) – Sana’s Group', student: 'seed-byron', pickup: '12:50', drop: '13:10' },
-    { route: 'RCC SPE (Welding) – Sana’s Group', student: 'seed-alex', pickup: '12:50', drop: '13:10' },
-    { route: 'RCC SPE (Welding) – Sana’s Group', student: 'seed-ismiel', pickup: '12:50', drop: '13:10' },
+    { route: "RCC SPE (Welding) - Sana's Group", student: 'seed-byron', pickup: '12:50', drop: '13:10' },
+    { route: "RCC SPE (Welding) - Sana's Group", student: 'seed-alex', pickup: '12:50', drop: '13:10' },
+    { route: "RCC SPE (Welding) - Sana's Group", student: 'seed-ismiel', pickup: '12:50', drop: '13:10' },
     // Talal group (Dynamic Hope)
-    { route: 'Dynamic Hope SPE – Talal’s Group', student: 'seed-min', pickup: '08:11', drop: '08:45' },
-    { route: 'Dynamic Hope SPE – Talal’s Group', student: 'seed-daynika', pickup: '08:20', drop: '08:45' },
+    { route: "Dynamic Hope SPE - Talal's Group", student: 'seed-min', pickup: '08:11', drop: '08:45' },
+    { route: "Dynamic Hope SPE - Talal's Group", student: 'seed-daynika', pickup: '08:20', drop: '08:45' },
     // Project Team (Talal)
-    { route: 'Project Team SPE – Talal’s Group', student: 'seed-edgar', pickup: '07:15', drop: '07:25' },
+    { route: "Project Team SPE - Talal's Group", student: 'seed-edgar', pickup: '07:15', drop: '07:25' },
   ];
   for (const t of toCreate) {
     const route = rByName[t.route];
