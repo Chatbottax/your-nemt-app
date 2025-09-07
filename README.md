@@ -18,6 +18,18 @@ cp .env.example .env
 #   npm run dev
 ```
 
+### Quick Start (SQLite)
+- Recommend Node.js 20 LTS for best compatibility.
+- Ensure `.env` has:
+  - `DB_PROVIDER=sqlite`
+  - `DATABASE_URL=file:./dev.db` (already set by default)
+- First run (or when schema changes):
+  - `npm run db:sqlite:reset`  # drops local `prisma/dev.db`, re-pushes schema, generates client, seeds
+- Start in dev:
+  - `npm run dev`
+
+If `prisma db push` fails with a message like "index associated with UNIQUE or PRIMARY KEY constraint cannot be dropped", reset the local SQLite file with `npm run db:sqlite:reset`.
+
 ## Scripts
 - `npm run dev` – run Next.js and Express server in dev mode
 - `npm run build` – build frontend
@@ -47,7 +59,8 @@ cp .env.example .env
 
 - Dev fallback: SQLite (no external install)
   - Already configured in `.env` as `file:./dev.db`. To use it:
-    - `npm run dev:sqlite`
+  - Option A (Prisma push): `npm run db:sqlite:reset` (first time or after schema changes)
+  - Option B (Quick init, no db push): `npm run dev:sqlite:quick`
   - For production, switch back to Postgres as above.
 
 ## License

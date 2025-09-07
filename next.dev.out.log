@@ -5,3 +5,10 @@
 
  ✓ Starting...
  ✓ Ready in 5.6s
+ ○ Compiling / ...
+ ✓ Compiled / in 3s (321 modules)
+ GET / 200 in 3741ms
+ ○ Compiling /dashboard ...
+ ✓ Compiled /dashboard in 4.6s (325 modules)
+ GET / 200 in 334ms
+ GET /dashboard 200 in 345ms

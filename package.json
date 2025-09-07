@@ -12,7 +12,9 @@
     "db:migrate": "prisma migrate deploy",
     "db:sqlite:push": "prisma db push --schema prisma/schema.sqlite.prisma",
     "db:sqlite:generate": "prisma generate --schema prisma/schema.sqlite.prisma",
+    "db:sqlite:reset": "node -e \"const fs=require('fs');try{fs.unlinkSync('prisma/dev.db')}catch(e){}\" && npm run db:sqlite:push && npm run db:sqlite:generate && npm run seed",
     "dev:sqlite": "npm run db:sqlite:push && npm run db:sqlite:generate && npm run seed && npm run dev",
+    "dev:sqlite:quick": "node scripts/init-sqlite.js && npm run db:sqlite:generate && npm run seed && npm run dev",
     "seed": "node prisma/seed.js",
     "test": "echo 'No tests'"
   },
